@@ -141,6 +141,7 @@ class User:
         return value
     
 
+
 class Wallet:
     """
     Кошелёк пользователя для одной валюты.
@@ -193,4 +194,99 @@ class Wallet:
             raise TypeError("Amount must be a number")
         if amount <= 0:
             raise ValueError("Amount must be positive")
+
+
+
+class Portfolio:
+    """
+    Портфель пользователя: набор кошельков по валютам.
+    """
+
+    def __init__(self, user: User, wallets: dict[str, Wallet] | None = None) -> None:
+        self._user = user
+        self._user_id = user.user_id
+        self._wallets: dict[str, Wallet] = {}
+
+        if wallets:
+            # добавляем уже существующие кошельки (например, из JSON)
+            for code, wallet in wallets.items():
+                if code in self._wallets:
+                    raise ValueError("Duplicate currency_code in wallets")
+                self._wallets[code] = wallet
+
+    # --------- Properties ---------
+
+    @property
+    def user(self) -> User:
+        """Геттер пользователя (без возможности перезаписи)."""
+        return self._user
+
+    @property
+    def wallets(self) -> dict[str, Wallet]:
+        """Возвращает копию словаря кошельков."""
+        return dict(self._wallets)
+
+    # --------- Public API ---------
+
+    def add_currency(self, currency_code: str) -> Wallet:
+        """
+        Добавляет новый кошелёк в портфель, если его ещё нет.
+        Возвращает созданный кошелёк.
+        """
+        code = self._normalize_currency_code(currency_code)
+        if code in self._wallets:
+            raise ValueError(f"Wallet for {code} already exists")
+
+        wallet = Wallet(currency_code=code, balance=0.0)
+        self._wallets[code] = wallet
+        return wallet
+
+    def get_wallet(self, currency_code: str) -> Wallet:
+        """Возвращает кошелёк по коду валюты."""
+        code = self._normalize_currency_code(currency_code)
+        try:
+            return self._wallets[code]
+        except KeyError as exc:
+            raise KeyError(f"No wallet for currency: {code}") from exc
+
+    def get_total_value(self, base_currency: str = "USD") -> float:
+        """
+        Возвращает общую стоимость всех валют в base_currency.
+        Для упрощения используем фиксированные курсы.
+        """
+        base = self._normalize_currency_code(base_currency)
+
+        # Фиктивные курсы: 1 единица валюты -> сколько в USD
+        # (достаточно для демонстрации конвертации на этом этапе)
+        exchange_rates_to_usd: dict[str, float] = {
+            "USD": 1.0,
+            "EUR": 1.1,
+            "BTC": 40000.0,
+        }
+
+        total_usd = 0.0
+        for code, wallet in self._wallets.items():
+            if code not in exchange_rates_to_usd:
+                raise KeyError(f"No exchange rate for currency: {code}")
+            total_usd += wallet.balance * exchange_rates_to_usd[code]
+
+        if base == "USD":
+            return total_usd
+
+        if base not in exchange_rates_to_usd:
+            raise KeyError(f"No exchange rate for base currency: {base}")
+
+        # total_usd / (USD per 1 base) = total in base
+        return total_usd / exchange_rates_to_usd[base]
+
+    # --------- Internal helpers ---------
+
+    @staticmethod
+    def _normalize_currency_code(currency_code: str) -> str:
+        if not isinstance(currency_code, str):
+            raise TypeError("currency_code must be str")
+        code = currency_code.strip().upper()
+        if code == "":
+            raise ValueError("currency_code cannot be empty")
+        return code
 
