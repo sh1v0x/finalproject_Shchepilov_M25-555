@@ -4,11 +4,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import (
     ApiRequestError,
     CurrencyNotFoundError,
-    InsufficientFundsError,
 )
+from valutatrade_hub.core.models import Wallet
 from valutatrade_hub.core.utils import (
     data_dir,
     generate_salt,
@@ -21,6 +22,15 @@ from valutatrade_hub.core.utils import (
 )
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.settings import SettingsLoader
+
+
+def validate_currency_code(code: str) -> str:
+    """
+    Валидирует валютный код через реестр currencies.get_currency().
+    Возвращает нормализованный code (upper).
+    """
+    cur = get_currency(code)  # бросит CurrencyNotFoundError при неизвестном коде
+    return cur.code
 
 USERS_FILE: Path = data_dir() / "users.json"
 PORTFOLIOS_FILE: Path = data_dir() / "portfolios.json"
@@ -47,6 +57,46 @@ def _load_portfolios() -> list[dict[str, Any]]:
 
 def _save_portfolios(portfolios: list[dict[str, Any]]) -> None:
     save_json(PORTFOLIOS_FILE, portfolios)
+
+def _update_user_wallet(
+    user_id: int,
+    currency_code: str,
+    updater: callable,
+) -> tuple[float, float]:
+    """
+    Безопасная операция: чтение → модификация → запись.
+    updater принимает текущий balance и возвращает новый balance.
+    Возвращает (before, after).
+    """
+    portfolios = _load_portfolios()
+    record = next((p for p in portfolios if int(p.get("user_id", -1)) == user_id), None)
+    if record is None:
+        # если портфеля нет — создадим запись
+        record = {"user_id": user_id, "wallets": {}}
+        portfolios.append(record)
+
+    wallets = record.get("wallets")
+    if not isinstance(wallets, dict):
+        raise ValueError("portfolios.json: wallets must be an object")
+
+    code = validate_currency_code(currency_code)
+
+    payload = wallets.get(code, {})
+    if isinstance(payload, dict) and isinstance(payload.get("balance"), (int, float)):
+        before = float(payload["balance"])
+    elif code in wallets:
+        raise ValueError(f"Invalid wallet payload for {code}")
+    else:
+        before = 0.0
+
+    after = float(updater(before))
+
+    wallets[code] = {"balance": after}
+    record["wallets"] = wallets
+
+    _save_portfolios(portfolios)
+    return before, after
+
 
 
 def _next_user_id(users: list[dict[str, Any]]) -> int:
@@ -292,35 +342,24 @@ def buy_currency(
     user_id: int,
     currency_code: str,
     amount: float,
-    base_currency: str = "USD",
 ) -> dict[str, Any]:
-    """
-    Покупка валюты:
-      - валидируем currency и amount
-      - если кошелька нет — создаём
-      - увеличиваем баланс на amount
-      - опционально считаем оценочную стоимость по курсу currency->base
-    Возвращает данные для печати в CLI.
-    """
-    code = _normalize_currency_code(currency_code)
-    base = _normalize_currency_code(base_currency)
+    code = validate_currency_code(currency_code)
     amt = _validate_amount_positive(amount)
 
+    base = validate_currency_code(
+        SettingsLoader().get("BASE_CURRENCY", "USD")
+    )
+
     wallets = _load_user_portfolio(user_id)
-
     before = wallets.get(code, 0.0)
-    after = before + amt
 
-    # Обновляем портфель 
+    wallet = Wallet(currency_code=code, balance=before)
+    wallet.deposit(amt)
+    after = wallet.balance
+
     _save_user_wallet_balance(user_id, code, after)
 
-    # Курс и стоимость 
-    try:
-        rate = _get_rate(code, base)  # base per 1 currency
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Не удалось получить курс для {code}→{base}") from exc
-
-    cost = amt * rate
+    rate = _get_rate(code, base)
 
     return {
         "currency": code,
@@ -329,8 +368,22 @@ def buy_currency(
         "rate": rate,
         "before": before,
         "after": after,
-        "cost": cost,
+        "value_in_base": amt * rate,
     }
+
+
+    return {
+        "action": "BUY",
+        "user_id": user_id,
+        "currency_code": code,
+        "amount": float(amount),
+        "before": before,
+        "after": after,
+        "rate": rate,
+        "base": base,
+        "value_in_base": float(amount) * rate,
+    }
+
 
 
 @log_action("SELL", verbose=True)
@@ -338,18 +391,11 @@ def sell_currency(
     user_id: int,
     currency_code: str,
     amount: float,
-    base_currency: str = "USD",
 ) -> dict[str, Any]:
-    """
-    Продажа валюты:
-      - валидируем currency и amount
-      - проверяем наличие кошелька и достаточность средств
-      - уменьшаем баланс
-      - опционально: начисляем выручку в base (USD) кошелёк
-    """
-    code = _normalize_currency_code(currency_code)
-    base = _normalize_currency_code(base_currency)
+    code = validate_currency_code(currency_code)
     amt = _validate_amount_positive(amount)
+
+    base = validate_currency_code(SettingsLoader().get("BASE_CURRENCY", "USD"))
 
     wallets = _load_user_portfolio(user_id)
 
@@ -360,18 +406,14 @@ def sell_currency(
         )
 
     before = wallets[code]
-    if amt > before:
-        raise InsufficientFundsError(available=before, required=amt, code=code)
 
-    after = before - amt
+    wallet = Wallet(currency_code=code, balance=before)
+    wallet.withdraw(amt)  
+    after = wallet.balance
+
     _save_user_wallet_balance(user_id, code, after)
 
-    # Оценочная выручка в base по курсу code->base
-    try:
-        rate = _get_rate(code, base)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Не удалось получить курс для {code}→{base}") from exc
-
+    rate = _get_rate(code, base)
     revenue = amt * rate
 
     # Опционально: начисляем выручку в base-кошелёк (например, USD)
@@ -387,7 +429,7 @@ def sell_currency(
         "rate": rate,
         "before": before,
         "after": after,
-        "revenue": revenue,
+        "value_in_base": revenue,
     }
 
 
@@ -477,3 +519,10 @@ def get_rate_with_cache(
         "updated_at": updated_at,
         "reverse_rate": reverse_rate,
     }
+
+def get_rate(from_code: str, to_code: str) -> dict[str, Any]:
+    f = validate_currency_code(from_code)
+    t = validate_currency_code(to_code)
+
+    ttl = int(SettingsLoader().get("RATES_TTL_SECONDS", 300))
+    return get_rate_with_cache(from_code=f, to_code=t, max_age_seconds=ttl)
