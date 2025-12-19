@@ -41,18 +41,18 @@ def save_json(path: Path, data: Any) -> None:
 
 def normalize_username(username: str) -> str:
     if not isinstance(username, str):
-        raise TypeError("Username must be str")
+        raise TypeError("Имя должно быть строкой.")
     value = username.strip()
     if value == "":
-        raise ValueError("Username cannot be empty")
+        raise ValueError("Имя не может быть пустым.")
     return value
 
 
 def validate_password(password: str) -> None:
     if not isinstance(password, str):
-        raise TypeError("Password must be str")
+        raise TypeError("Пароль должен быть строкой.")
     if len(password) < 4:
-        raise ValueError("Password must be at least 4 characters long")
+        raise ValueError("Пароль должен быть не короче 4 символов.")
 
 
 def generate_salt(length: int = 8) -> str:

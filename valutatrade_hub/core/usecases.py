@@ -17,11 +17,11 @@ from valutatrade_hub.core.utils import (
     load_json,
     normalize_username,
     now_iso,
-    save_json,
     validate_password,
 )
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.infra.database import DatabaseManager
 
 
 def validate_currency_code(code: str) -> str:
@@ -38,25 +38,22 @@ RATES_FILE: Path = data_dir() / "rates.json"
 
 
 def _load_users() -> list[dict[str, Any]]:
-    data = load_json(USERS_FILE, default=[])
-    if not isinstance(data, list):
-        raise ValueError("users.json must contain a list")
-    return data
+    return DatabaseManager().read_users()
 
 
 def _save_users(users: list[dict[str, Any]]) -> None:
-    save_json(USERS_FILE, users)
+    DatabaseManager().write_users(users)
 
 
 def _load_portfolios() -> list[dict[str, Any]]:
-    data = load_json(PORTFOLIOS_FILE, default=[])
-    if not isinstance(data, list):
-        raise ValueError("portfolios.json must contain a list")
-    return data
+    return DatabaseManager().read_portfolios()
 
 
 def _save_portfolios(portfolios: list[dict[str, Any]]) -> None:
-    save_json(PORTFOLIOS_FILE, portfolios)
+    DatabaseManager().write_portfolios(portfolios)
+
+def _load_rates() -> dict[str, Any]:
+    return DatabaseManager().read_rates()
 
 def _update_user_wallet(
     user_id: int,
@@ -183,15 +180,6 @@ def _normalize_currency_code(code: str) -> str:
     if value == "":
         raise ValueError("currency_code cannot be empty")
     return value
-
-
-
-def _load_rates() -> dict[str, Any]:
-    data = load_json(RATES_FILE, default={})
-    if not isinstance(data, dict):
-        raise ValueError("rates.json must contain an object")
-    return data
-
 
 
 def _get_rate(from_code: str, to_code: str) -> float:
@@ -509,7 +497,7 @@ def get_rate_with_cache(
     rates["source"] = "Stub"
     rates["last_refresh"] = updated_at
 
-    save_json(RATES_FILE, rates)
+    DatabaseManager().write_rates(rates)
 
     reverse_rate = 1.0 / rate if rate != 0 else 0.0
     return {

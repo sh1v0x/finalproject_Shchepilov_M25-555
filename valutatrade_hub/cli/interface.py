@@ -10,7 +10,7 @@ from valutatrade_hub.core.exceptions import (
 from valutatrade_hub.core.usecases import (
     build_portfolio_report,
     buy_currency,
-    get_rate_with_cache,
+    get_rate,
     login_user,
     register_user,
     sell_currency,
@@ -167,22 +167,29 @@ def run_cli() -> None:
                     user_id=current_user_id,
                     currency_code=currency,
                     amount=amount,
-                    base_currency="USD",
                 )
-            except ValueError as exc:
+            except CurrencyNotFoundError as exc:
                 print(str(exc))
+                print(
+                    "Подсказка: используйте get-rate или"
+                    "проверьте код валюты (USD/EUR/BTC/ETH/RUB)."
+                )
                 continue
-            except TypeError as exc:
+            except ApiRequestError as exc:
+                print(str(exc))
+                print("Подсказка: повторите попытку позже.")
+                continue
+            except (ValueError, TypeError) as exc:
                 print(str(exc))
                 continue
 
             cur = result["currency"]
+            amt = result["amount"]
             base = result["base"]
             rate = result["rate"]
             before = result["before"]
             after = result["after"]
-            cost = result["cost"]
-            amt = result["amount"]
+            value = result["value_in_base"]
 
             amt_str = f"{amt:.4f}" if cur in {"BTC", "ETH"} else f"{amt:.2f}"
             before_str = f"{before:.4f}" if cur in {"BTC", "ETH"} else f"{before:.2f}"
@@ -194,8 +201,9 @@ def run_cli() -> None:
             )
             print("Изменения в портфеле:")
             print(f"- {cur}: было {before_str} → стало {after_str}")
-            print(f"Оценочная стоимость покупки: {cost:,.2f} {base}")
+            print(f"Оценочная стоимость покупки: {value:,.2f} {base}")
             continue
+
         
         if command == "sell":
             if current_user_id is None or current_username is None:
@@ -220,15 +228,19 @@ def run_cli() -> None:
                     user_id=current_user_id,
                     currency_code=currency,
                     amount=amount,
-                    base_currency="USD",
                 )
             except InsufficientFundsError as exc:
                 print(str(exc))
                 continue
-            except ValueError as exc:
+            except CurrencyNotFoundError as exc:
                 print(str(exc))
+                print("Подсказка: проверьте код валюты (USD/EUR/BTC/ETH/RUB).")
                 continue
-            except TypeError as exc:
+            except ApiRequestError as exc:
+                print(str(exc))
+                print("Подсказка: повторите попытку позже.")
+                continue
+            except (ValueError, TypeError) as exc:
                 print(str(exc))
                 continue
 
@@ -262,40 +274,35 @@ def run_cli() -> None:
                 continue
 
             try:
-                result = get_rate_with_cache(from_code=from_code, to_code=to_code)
+                info = get_rate(from_code=from_code, to_code=to_code)
             except CurrencyNotFoundError as exc:
                 print(str(exc))
-                print("Подсказка: используйте get-rate --from USD --to BTC")
-                print("Доступные коды: USD, EUR, BTC, ETH, RUB")
+                print("Подсказка: проверьте коды валют (USD/EUR/BTC/ETH/RUB).")
                 continue
             except ApiRequestError:
                 print(
-                    f"Курс {from_code.upper()}→{to_code.upper()} недоступен."
+                    f"Курс {from_code.upper()}→{to_code.upper()} недоступен. "
                     "Повторите попытку позже."
                 )
                 continue
-            except ValueError as exc:
-                print(str(exc))
-                continue
-            except TypeError as exc:
+            except (ValueError, TypeError) as exc:
                 print(str(exc))
                 continue
 
-            f = result["from"]
-            t = result["to"]
-            rate = result["rate"]
-            updated_at = result["updated_at"]
-            reverse = result["reverse_rate"]
+            from_cur = info["from"]
+            to_cur = info["to"]
+            rate = info["rate"]
+            updated_at = info["updated_at"]
+            reverse = info.get("reverse_rate")
 
-            # Для вывода как в примере (читаемо)
-            updated_pretty = updated_at.replace("T", " ")
+            print(
+                f"Курс {from_cur}→{to_cur}: {rate:.8f} "
+                f"(обновлено: {updated_at})"
+            )
 
-            print(f"Курс {f}→{t}: {rate:.8f} (обновлено: {updated_pretty})")
-            print(f"Обратный курс {t}→{f}: {reverse:,.2f}")
+            if reverse is not None:
+                print(f"Обратный курс {to_cur}→{from_cur}: {reverse:,.2f}")
+
             continue
-
-
-
-
 
         print(f"Неизвестная команда: {command}")
