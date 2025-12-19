@@ -4,6 +4,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.utils import (
     data_dir,
     generate_salt,
@@ -166,14 +171,14 @@ def _get_rate(from_code: str, to_code: str) -> float:
 
     if t == "USD":
         if f not in to_usd:
-            raise ValueError(f"Неизвестная валюта '{f}'")
+            raise CurrencyNotFoundError(f)
         return to_usd[f]
 
-    # Конвертация f -> USD -> t
     if t not in to_usd:
-        raise ValueError(f"Неизвестная базовая валюта '{t}'")
+        raise CurrencyNotFoundError(t)
     if f not in to_usd:
-        raise ValueError(f"Неизвестная валюта '{f}'")
+        raise CurrencyNotFoundError(f)
+
     return to_usd[f] / to_usd[t]
 
 
@@ -354,18 +359,7 @@ def sell_currency(
 
     before = wallets[code]
     if amt > before:
-        # форматирование под пример (BTC/ETH 4 знака)
-        if code in {"BTC", "ETH"}:
-            available = f"{before:.4f}"
-            required = f"{amt:.4f}"
-        else:
-            available = f"{before:.2f}"
-            required = f"{amt:.2f}"
-
-        raise ValueError(
-            f"Недостаточно средств: доступно {available} {code}, "
-            f"требуется {required} {code}"
-        )
+        raise InsufficientFundsError(available=before, required=amt, code=code)
 
     after = before - amt
     _save_user_wallet_balance(user_id, code, after)
@@ -456,8 +450,10 @@ def get_rate_with_cache(
     # Кеш отсутствует или устарел, берём из заглушки и обновляем кеш
     try:
         rate = _get_rate(f, t)
+    except CurrencyNotFoundError:
+        raise
     except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Курс {f}→{t} недоступен. Повторите попытку позже.") from exc
+        raise ApiRequestError(f"не удалось получить курс {f}→{t}") from exc
 
     updated_at = datetime.now().isoformat(timespec="seconds")
     rates[pair] = {"rate": rate, "updated_at": updated_at}

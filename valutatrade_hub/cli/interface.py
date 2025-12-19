@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import shlex
 
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.usecases import (
     build_portfolio_report,
     buy_currency,
@@ -217,6 +222,9 @@ def run_cli() -> None:
                     amount=amount,
                     base_currency="USD",
                 )
+            except InsufficientFundsError as exc:
+                print(str(exc))
+                continue
             except ValueError as exc:
                 print(str(exc))
                 continue
@@ -255,6 +263,17 @@ def run_cli() -> None:
 
             try:
                 result = get_rate_with_cache(from_code=from_code, to_code=to_code)
+            except CurrencyNotFoundError as exc:
+                print(str(exc))
+                print("Подсказка: используйте get-rate --from USD --to BTC")
+                print("Доступные коды: USD, EUR, BTC, ETH, RUB")
+                continue
+            except ApiRequestError:
+                print(
+                    f"Курс {from_code.upper()}→{to_code.upper()} недоступен."
+                    "Повторите попытку позже."
+                )
+                continue
             except ValueError as exc:
                 print(str(exc))
                 continue

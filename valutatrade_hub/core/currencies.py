@@ -123,5 +123,5 @@ def get_currency(code: str) -> Currency:
     norm = _validate_code(code)
     currency = _CURRENCY_REGISTRY.get(norm)
     if currency is None:
-        raise CurrencyNotFoundError(f"Currency code '{norm}' not found")
+        raise CurrencyNotFoundError(norm)
     return currency
