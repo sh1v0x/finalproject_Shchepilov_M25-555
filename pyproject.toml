@@ -1,0 +1,39 @@
+[project]
+name = "final-project"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "sh1v",email = "sh1vvv@yandex.ru"}
+]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "prettytable (>=3.17.0,<4.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.14.10,<0.15.0)"
+]
+
+[tool.poetry]
+name = "finalproject_<фамилия>_<группа>"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+packages = [{ include = "valutatrade_hub" }]
+
+[tool.poetry.scripts]
+project = "main:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
