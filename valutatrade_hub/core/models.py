@@ -139,3 +139,58 @@ class User:
         if not isinstance(value, datetime):
             raise TypeError("registration_date must be datetime")
         return value
+    
+
+class Wallet:
+    """
+    Кошелёк пользователя для одной валюты.
+    """
+
+    def __init__(self, currency_code: str, balance: float = 0.0) -> None:
+        self.currency_code = currency_code
+        self.balance = balance
+
+    # --------- Public API ---------
+
+    def deposit(self, amount: float) -> None:
+        """Пополнение баланса."""
+        self._validate_amount(amount)
+        self.balance += amount
+
+    def withdraw(self, amount: float) -> None:
+        """Снятие средств при достаточном балансе."""
+        self._validate_amount(amount)
+        if amount > self.balance:
+            raise ValueError("Insufficient funds")
+        self.balance -= amount
+
+    def get_balance_info(self) -> dict[str, float | str]:
+        """Возвращает информацию о балансе."""
+        return {
+            "currency_code": self.currency_code,
+            "balance": self.balance,
+        }
+
+    # --------- Properties ---------
+
+    @property
+    def balance(self) -> float:
+        return self._balance
+
+    @balance.setter
+    def balance(self, value: float) -> None:
+        if not isinstance(value, (int, float)):
+            raise TypeError("Balance must be a number")
+        if value < 0:
+            raise ValueError("Balance cannot be negative")
+        self._balance = float(value)
+
+    # --------- Internal helpers ---------
+
+    @staticmethod
+    def _validate_amount(amount: float) -> None:
+        if not isinstance(amount, (int, float)):
+            raise TypeError("Amount must be a number")
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+
