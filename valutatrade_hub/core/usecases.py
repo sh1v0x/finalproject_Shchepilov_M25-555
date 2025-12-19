@@ -19,6 +19,7 @@ from valutatrade_hub.core.utils import (
     save_json,
     validate_password,
 )
+from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.settings import SettingsLoader
 
 USERS_FILE: Path = data_dir() / "users.json"
@@ -286,7 +287,7 @@ def _validate_amount_positive(amount: float) -> float:
     return value
 
 
-
+@log_action("BUY", verbose=True)
 def buy_currency(
     user_id: int,
     currency_code: str,
@@ -332,7 +333,7 @@ def buy_currency(
     }
 
 
-
+@log_action("SELL", verbose=True)
 def sell_currency(
     user_id: int,
     currency_code: str,
