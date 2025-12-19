@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from valutatrade_hub.core.utils import (
 
 USERS_FILE: Path = data_dir() / "users.json"
 PORTFOLIOS_FILE: Path = data_dir() / "portfolios.json"
+RATES_FILE: Path = data_dir() / "rates.json"
 
 
 def _load_users() -> list[dict[str, Any]]:
@@ -46,6 +48,7 @@ def _next_user_id(users: list[dict[str, Any]]) -> int:
     # user_id автоинкремент: max + 1
     max_id = max(int(u["user_id"]) for u in users if "user_id" in u)
     return max_id + 1
+
 
 
 def register_user(username: str, password: str) -> tuple[int, str]:
@@ -88,6 +91,7 @@ def register_user(username: str, password: str) -> tuple[int, str]:
     return user_id, username_norm
 
 
+
 def login_user(username: str, password: str) -> tuple[int, str]:
     """
     Проверяет логин/пароль.
@@ -112,3 +116,130 @@ def login_user(username: str, password: str) -> tuple[int, str]:
         raise ValueError("Неверный пароль")
 
     return int(user["user_id"]), username_norm
+
+
+
+def _normalize_currency_code(code: str) -> str:
+    if not isinstance(code, str):
+        raise TypeError("currency_code must be str")
+    value = code.strip().upper()
+    if value == "":
+        raise ValueError("currency_code cannot be empty")
+    return value
+
+
+
+def _load_rates() -> dict[str, Any]:
+    data = load_json(RATES_FILE, default={})
+    if not isinstance(data, dict):
+        raise ValueError("rates.json must contain an object")
+    return data
+
+
+
+def _get_rate(from_code: str, to_code: str) -> float:
+    """
+    Единый контракт получения курса.
+    Сначала пробуем rates.json, если там нет — используем заглушку.
+    """
+    f = _normalize_currency_code(from_code)
+    t = _normalize_currency_code(to_code)
+    if f == t:
+        return 1.0
+
+    pair = f"{f}_{t}"
+    rates = _load_rates()
+    if pair in rates and isinstance(rates[pair], dict) and "rate" in rates[pair]:
+        rate_val = rates[pair]["rate"]
+        if isinstance(rate_val, (int, float)) and rate_val > 0:
+            return float(rate_val)
+
+    # Заглушка (пока Parser Service не подключён)
+    # 1 единица валюты = сколько в USD
+    to_usd: dict[str, float] = {
+        "USD": 1.0,
+        "EUR": 1.07,
+        "BTC": 59337.21,
+        "RUB": 0.01016,
+        "ETH": 3720.0,
+    }
+
+    if t == "USD":
+        if f not in to_usd:
+            raise ValueError(f"Неизвестная валюта '{f}'")
+        return to_usd[f]
+
+    # Конвертация f -> USD -> t
+    if t not in to_usd:
+        raise ValueError(f"Неизвестная базовая валюта '{t}'")
+    if f not in to_usd:
+        raise ValueError(f"Неизвестная валюта '{f}'")
+    return to_usd[f] / to_usd[t]
+
+
+
+def _load_user_portfolio(user_id: int) -> dict[str, float]:
+    portfolios = _load_portfolios()
+    record = next((p for p in portfolios if int(p.get("user_id", -1)) == user_id), None)
+    if record is None:
+        return {}
+
+    wallets = record.get("wallets", {})
+    if not isinstance(wallets, dict):
+        raise ValueError("portfolios.json: wallets must be an object")
+
+    result: dict[str, float] = {}
+    for code, payload in wallets.items():
+        c = _normalize_currency_code(code)
+        if isinstance(payload, dict) and "balance" in payload:
+            bal = payload["balance"]
+        else:
+            bal = None
+
+        if not isinstance(bal, (int, float)):
+            raise ValueError(f"Invalid balance for {c}")
+
+        result[c] = float(bal)
+
+    return result
+
+
+
+def build_portfolio_report(user_id: int, base_currency: str = "USD") -> dict[str, Any]:
+    """
+    Возвращает данные для вывода show-portfolio:
+    - base
+    - items: [{currency_code, balance, value_in_base}]
+    - total
+    """
+    base = _normalize_currency_code(base_currency)
+    
+    # Валидация base даже при пустом портфеле
+    _get_rate("USD", base)
+
+
+    wallets = _load_user_portfolio(user_id)
+    items: list[dict[str, Any]] = []
+    total = 0.0
+
+    for code, balance in wallets.items():
+        rate = _get_rate(code, base)
+        value_in_base = balance * rate
+        items.append(
+            {
+                "currency_code": code,
+                "balance": balance,
+                "value_in_base": value_in_base,
+            }
+        )
+        total += value_in_base
+
+    # стабильно сортируем для красивого вывода
+    items.sort(key=lambda x: x["currency_code"])
+
+    return {
+        "base": base,
+        "items": items,
+        "total": total,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }

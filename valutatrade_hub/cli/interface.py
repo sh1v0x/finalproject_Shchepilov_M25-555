@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import shlex
 
-from valutatrade_hub.core.usecases import login_user, register_user
+from valutatrade_hub.core.usecases import (
+    build_portfolio_report,
+    login_user,
+    register_user,
+)
 
 
 def _get_flag_value(tokens: list[str], flag: str) -> str | None:
@@ -83,10 +87,54 @@ def run_cli() -> None:
                 print(str(exc))
                 continue
 
-            current_user_id = user_id  # noqa: F841
-            current_username = uname  # noqa: F841
+            current_user_id = user_id  
+            current_username = uname  
 
             print(f"Вы вошли как '{uname}'")
             continue
+
+        if command == "show-portfolio":
+            if current_user_id is None or current_username is None:
+                print("Сначала выполните login")
+                continue
+
+            base = _get_flag_value(tokens, "--base") or "USD"
+
+            try:
+                report = build_portfolio_report(current_user_id, base_currency=base)
+            except ValueError as exc:
+                print(str(exc))
+                continue
+            except TypeError as exc:
+                print(str(exc))
+                continue
+
+            base_code = report["base"]
+            items = report["items"]
+            total = report["total"]
+
+            print(f"Портфель пользователя '{current_username}' (база: {base_code}):")
+
+            if not items:
+                print("Кошельков нет")
+                continue
+
+            for item in items:
+                code = item["currency_code"]
+                bal = item["balance"]
+                val = item["value_in_base"]
+
+                # Форматирование похоже на пример
+                if code in {"BTC", "ETH"}:
+                    bal_str = f"{bal:.4f}"
+                else:
+                    bal_str = f"{bal:.2f}"
+
+                print(f"- {code}: {bal_str}  → {val:,.2f} {base_code}")
+
+            print("---------------------------------")
+            print(f"ИТОГО: {total:,.2f} {base_code}")
+            continue
+
 
         print(f"Неизвестная команда: {command}")
