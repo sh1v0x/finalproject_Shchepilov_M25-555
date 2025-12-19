@@ -86,3 +86,29 @@ def register_user(username: str, password: str) -> tuple[int, str]:
     _save_portfolios(portfolios)
 
     return user_id, username_norm
+
+
+def login_user(username: str, password: str) -> tuple[int, str]:
+    """
+    Проверяет логин/пароль.
+    Возвращает (user_id, username).
+    """
+    username_norm = normalize_username(username)
+    validate_password(password)
+
+    users = _load_users()
+
+    user = next((u for u in users if u.get("username") == username_norm), None)
+    if user is None:
+        raise ValueError(f"Пользователь '{username_norm}' не найден")
+
+    salt = user.get("salt")
+    stored_hash = user.get("hashed_password")
+    if not isinstance(salt, str) or not isinstance(stored_hash, str):
+        raise ValueError("Некорректные данные пользователя в users.json")
+
+    candidate_hash = hash_password(password, salt)
+    if candidate_hash != stored_hash:
+        raise ValueError("Неверный пароль")
+
+    return int(user["user_id"]), username_norm
