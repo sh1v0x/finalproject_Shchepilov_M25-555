@@ -19,6 +19,7 @@ from valutatrade_hub.core.utils import (
     save_json,
     validate_password,
 )
+from valutatrade_hub.infra.settings import SettingsLoader
 
 USERS_FILE: Path = data_dir() / "users.json"
 PORTFOLIOS_FILE: Path = data_dir() / "portfolios.json"
@@ -409,7 +410,7 @@ def _is_fresh(updated_at_iso: str, max_age_seconds: int = 300) -> bool:
 def get_rate_with_cache(
     from_code: str,
     to_code: str,
-    max_age_seconds: int = 300,
+    max_age_seconds: int | None = None,
 ) -> dict[str, Any]:
     """
     Возвращает курс from->to с учётом кеша rates.json.
@@ -427,6 +428,9 @@ def get_rate_with_cache(
     """
     f = _normalize_currency_code(from_code)
     t = _normalize_currency_code(to_code)
+
+    if max_age_seconds is None:
+        max_age_seconds = int(SettingsLoader().get("RATES_TTL_SECONDS", 300))
 
     pair = f"{f}_{t}"
 
