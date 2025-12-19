@@ -243,3 +243,153 @@ def build_portfolio_report(user_id: int, base_currency: str = "USD") -> dict[str
         "total": total,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+
+def _save_user_wallet_balance(
+        user_id: int, 
+        currency_code: str, 
+        new_balance: float
+    ) -> None:
+    portfolios = _load_portfolios()
+    record = next((p for p in portfolios if int(p.get("user_id", -1)) == user_id), None)
+
+    if record is None:
+        # На всякий случай (в норме портфель создаётся при register)
+        record = {"user_id": user_id, "wallets": {}}
+        portfolios.append(record)
+
+    wallets = record.get("wallets")
+    if not isinstance(wallets, dict):
+        raise ValueError("portfolios.json: wallets must be an object")
+
+    code = _normalize_currency_code(currency_code)
+    wallets[code] = {"balance": float(new_balance)}
+    record["wallets"] = wallets
+
+    _save_portfolios(portfolios)
+
+
+
+def _validate_amount_positive(amount: float) -> float:
+    if not isinstance(amount, (int, float)):
+        raise TypeError("'amount' должен быть положительным числом")
+    value = float(amount)
+    if value <= 0:
+        raise ValueError("'amount' должен быть положительным числом")
+    return value
+
+
+
+def buy_currency(
+    user_id: int,
+    currency_code: str,
+    amount: float,
+    base_currency: str = "USD",
+) -> dict[str, Any]:
+    """
+    Покупка валюты:
+      - валидируем currency и amount
+      - если кошелька нет — создаём
+      - увеличиваем баланс на amount
+      - опционально считаем оценочную стоимость по курсу currency->base
+    Возвращает данные для печати в CLI.
+    """
+    code = _normalize_currency_code(currency_code)
+    base = _normalize_currency_code(base_currency)
+    amt = _validate_amount_positive(amount)
+
+    wallets = _load_user_portfolio(user_id)
+
+    before = wallets.get(code, 0.0)
+    after = before + amt
+
+    # Обновляем портфель 
+    _save_user_wallet_balance(user_id, code, after)
+
+    # Курс и стоимость 
+    try:
+        rate = _get_rate(code, base)  # base per 1 currency
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Не удалось получить курс для {code}→{base}") from exc
+
+    cost = amt * rate
+
+    return {
+        "currency": code,
+        "amount": amt,
+        "base": base,
+        "rate": rate,
+        "before": before,
+        "after": after,
+        "cost": cost,
+    }
+
+
+
+def sell_currency(
+    user_id: int,
+    currency_code: str,
+    amount: float,
+    base_currency: str = "USD",
+) -> dict[str, Any]:
+    """
+    Продажа валюты:
+      - валидируем currency и amount
+      - проверяем наличие кошелька и достаточность средств
+      - уменьшаем баланс
+      - опционально: начисляем выручку в base (USD) кошелёк
+    """
+    code = _normalize_currency_code(currency_code)
+    base = _normalize_currency_code(base_currency)
+    amt = _validate_amount_positive(amount)
+
+    wallets = _load_user_portfolio(user_id)
+
+    if code not in wallets:
+        raise ValueError(
+            f"У вас нет кошелька '{code}'. Добавьте валюту: "
+            "она создаётся автоматически при первой покупке."
+        )
+
+    before = wallets[code]
+    if amt > before:
+        # форматирование под пример (BTC/ETH 4 знака)
+        if code in {"BTC", "ETH"}:
+            available = f"{before:.4f}"
+            required = f"{amt:.4f}"
+        else:
+            available = f"{before:.2f}"
+            required = f"{amt:.2f}"
+
+        raise ValueError(
+            f"Недостаточно средств: доступно {available} {code}, "
+            f"требуется {required} {code}"
+        )
+
+    after = before - amt
+    _save_user_wallet_balance(user_id, code, after)
+
+    # Оценочная выручка в base по курсу code->base
+    try:
+        rate = _get_rate(code, base)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Не удалось получить курс для {code}→{base}") from exc
+
+    revenue = amt * rate
+
+    # Опционально: начисляем выручку в base-кошелёк (например, USD)
+    if code != base:
+        base_before = wallets.get(base, 0.0)
+        base_after = base_before + revenue
+        _save_user_wallet_balance(user_id, base, base_after)
+
+    return {
+        "currency": code,
+        "amount": amt,
+        "base": base,
+        "rate": rate,
+        "before": before,
+        "after": after,
+        "revenue": revenue,
+    }

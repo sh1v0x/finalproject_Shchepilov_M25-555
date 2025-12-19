@@ -4,8 +4,10 @@ import shlex
 
 from valutatrade_hub.core.usecases import (
     build_portfolio_report,
+    buy_currency,
     login_user,
     register_user,
+    sell_currency,
 )
 
 
@@ -135,6 +137,114 @@ def run_cli() -> None:
             print("---------------------------------")
             print(f"ИТОГО: {total:,.2f} {base_code}")
             continue
+
+        if command == "buy":
+            if current_user_id is None or current_username is None:
+                print("Сначала выполните login")
+                continue
+
+            currency = _get_flag_value(tokens, "--currency")
+            amount_str = _get_flag_value(tokens, "--amount")
+
+            if not currency or not amount_str:
+                print("Ошибка: используйте buy --currency <str> --amount <float>")
+                continue
+
+            try:
+                amount = float(amount_str)
+            except ValueError:
+                print("'amount' должен быть положительным числом")
+                continue
+
+            try:
+                result = buy_currency(
+                    user_id=current_user_id,
+                    currency_code=currency,
+                    amount=amount,
+                    base_currency="USD",
+                )
+            except ValueError as exc:
+                print(str(exc))
+                continue
+            except TypeError as exc:
+                print(str(exc))
+                continue
+
+            cur = result["currency"]
+            base = result["base"]
+            rate = result["rate"]
+            before = result["before"]
+            after = result["after"]
+            cost = result["cost"]
+            amt = result["amount"]
+
+            amt_str = f"{amt:.4f}" if cur in {"BTC", "ETH"} else f"{amt:.2f}"
+            before_str = f"{before:.4f}" if cur in {"BTC", "ETH"} else f"{before:.2f}"
+            after_str = f"{after:.4f}" if cur in {"BTC", "ETH"} else f"{after:.2f}"
+
+            print(
+                f"Покупка выполнена: {amt_str} {cur} "
+                f"по курсу {rate:,.2f} {base}/{cur}"
+            )
+            print("Изменения в портфеле:")
+            print(f"- {cur}: было {before_str} → стало {after_str}")
+            print(f"Оценочная стоимость покупки: {cost:,.2f} {base}")
+            continue
+        
+        if command == "sell":
+            if current_user_id is None or current_username is None:
+                print("Сначала выполните login")
+                continue
+
+            currency = _get_flag_value(tokens, "--currency")
+            amount_str = _get_flag_value(tokens, "--amount")
+
+            if not currency or not amount_str:
+                print("Ошибка: используйте sell --currency <str> --amount <float>")
+                continue
+
+            try:
+                amount = float(amount_str)
+            except ValueError:
+                print("'amount' должен быть положительным числом")
+                continue
+
+            try:
+                result = sell_currency(
+                    user_id=current_user_id,
+                    currency_code=currency,
+                    amount=amount,
+                    base_currency="USD",
+                )
+            except ValueError as exc:
+                print(str(exc))
+                continue
+            except TypeError as exc:
+                print(str(exc))
+                continue
+
+            cur = result["currency"]
+            base = result["base"]
+            rate = result["rate"]
+            before = result["before"]
+            after = result["after"]
+            revenue = result["revenue"]
+            amt = result["amount"]
+
+            amt_str = f"{amt:.4f}" if cur in {"BTC", "ETH"} else f"{amt:.2f}"
+            before_str = f"{before:.4f}" if cur in {"BTC", "ETH"} else f"{before:.2f}"
+            after_str = f"{after:.4f}" if cur in {"BTC", "ETH"} else f"{after:.2f}"
+
+            print(
+                f"Продажа выполнена: {amt_str} {cur} "
+                f"по курсу {rate:,.2f} {base}/{cur}"
+            )
+            print("Изменения в портфеле:")
+            print(f"- {cur}: было {before_str} → стало {after_str}")
+            print(f"Оценочная выручка: {revenue:,.2f} {base}")
+            continue
+
+
 
 
         print(f"Неизвестная команда: {command}")
