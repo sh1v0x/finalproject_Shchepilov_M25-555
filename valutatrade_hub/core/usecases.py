@@ -393,3 +393,86 @@ def sell_currency(
         "after": after,
         "revenue": revenue,
     }
+
+
+def _parse_iso_dt(value: str) -> datetime | None:
+    if not isinstance(value, str) or value.strip() == "":
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _is_fresh(updated_at_iso: str, max_age_seconds: int = 300) -> bool:
+    dt = _parse_iso_dt(updated_at_iso)
+    if dt is None:
+        return False
+    age = (datetime.now() - dt).total_seconds()
+    return age <= max_age_seconds
+
+
+def get_rate_with_cache(
+    from_code: str,
+    to_code: str,
+    max_age_seconds: int = 300,
+) -> dict[str, Any]:
+    """
+    Возвращает курс from->to с учётом кеша rates.json.
+    Если кеш свежий (<= max_age_seconds) — берём его.
+    Иначе — получаем через заглушку (_get_rate) и обновляем кеш.
+
+    Возвращает:
+      {
+        "from": "USD",
+        "to": "BTC",
+        "rate": 0.00001685,
+        "updated_at": "2025-10-09T00:03:22",
+        "reverse_rate": 59337.21
+      }
+    """
+    f = _normalize_currency_code(from_code)
+    t = _normalize_currency_code(to_code)
+
+    pair = f"{f}_{t}"
+
+    rates = _load_rates()
+    cached = rates.get(pair)
+
+    if isinstance(cached, dict) and "rate" in cached and "updated_at" in cached:
+        rate_val = cached.get("rate")
+        upd = cached.get("updated_at")
+        if isinstance(rate_val, (int, float)) and isinstance(upd, str):
+            if float(rate_val) > 0 and _is_fresh(upd, max_age_seconds=max_age_seconds):
+                reverse = 1.0 / float(rate_val)
+                return {
+                    "from": f,
+                    "to": t,
+                    "rate": float(rate_val),
+                    "updated_at": upd,
+                    "reverse_rate": reverse,
+                }
+
+    # Кеш отсутствует или устарел, берём из заглушки и обновляем кеш
+    try:
+        rate = _get_rate(f, t)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Курс {f}→{t} недоступен. Повторите попытку позже.") from exc
+
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    rates[pair] = {"rate": rate, "updated_at": updated_at}
+
+    # Сервис-метаданные
+    rates["source"] = "Stub"
+    rates["last_refresh"] = updated_at
+
+    save_json(RATES_FILE, rates)
+
+    reverse_rate = 1.0 / rate if rate != 0 else 0.0
+    return {
+        "from": f,
+        "to": t,
+        "rate": rate,
+        "updated_at": updated_at,
+        "reverse_rate": reverse_rate,
+    }

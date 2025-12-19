@@ -5,6 +5,7 @@ import shlex
 from valutatrade_hub.core.usecases import (
     build_portfolio_report,
     buy_currency,
+    get_rate_with_cache,
     login_user,
     register_user,
     sell_currency,
@@ -243,6 +244,37 @@ def run_cli() -> None:
             print(f"- {cur}: было {before_str} → стало {after_str}")
             print(f"Оценочная выручка: {revenue:,.2f} {base}")
             continue
+
+        if command == "get-rate":
+            from_code = _get_flag_value(tokens, "--from")
+            to_code = _get_flag_value(tokens, "--to")
+
+            if not from_code or not to_code:
+                print("Ошибка: используйте get-rate --from <str> --to <str>")
+                continue
+
+            try:
+                result = get_rate_with_cache(from_code=from_code, to_code=to_code)
+            except ValueError as exc:
+                print(str(exc))
+                continue
+            except TypeError as exc:
+                print(str(exc))
+                continue
+
+            f = result["from"]
+            t = result["to"]
+            rate = result["rate"]
+            updated_at = result["updated_at"]
+            reverse = result["reverse_rate"]
+
+            # Для вывода как в примере (читаемо)
+            updated_pretty = updated_at.replace("T", " ")
+
+            print(f"Курс {f}→{t}: {rate:.8f} (обновлено: {updated_pretty})")
+            print(f"Обратный курс {t}→{f}: {reverse:,.2f}")
+            continue
+
 
 
 
