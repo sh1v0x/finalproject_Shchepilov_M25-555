@@ -48,3 +48,7 @@ def setup_logging() -> None:
     handler.setFormatter(logging.Formatter(fmt))
 
     root.addHandler(handler)
+
+def get_logger(name: str = "valutatrade") -> logging.Logger:
+    return logging.getLogger(name)
+

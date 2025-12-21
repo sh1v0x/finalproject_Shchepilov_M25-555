@@ -1,39 +1,29 @@
-[project]
-name = "final-project"
+[tool.poetry]
+name = "finalproject_Shchepilov_M25-555"
 version = "0.1.0"
-description = ""
-authors = [
-    {name = "sh1v",email = "sh1vvv@yandex.ru"}
-]
+description = "ValutaTrade Hub - консольное приложение для получения и кэширования курсов валют, а также симуляции операций покупки и продажи"
+authors = ["sh1v <sh1vvv@yandex.ru>"]
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = [
-    "prettytable (>=3.17.0,<4.0.0)"
-]
+packages = [{ include = "valutatrade_hub" }]
 
+[tool.poetry.dependencies]
+python = ">=3.14"
+prettytable = ">=3.17.0,<4.0.0"
+requests = ">=2.32.5,<3.0.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = ">=0.14.10,<0.15.0"
+
+[tool.poetry.scripts]
+project = "main:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[dependency-groups]
-dev = [
-    "ruff (>=0.14.10,<0.15.0)"
-]
-
-[tool.poetry]
-name = "finalproject_<фамилия>_<группа>"
-version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
-packages = [{ include = "valutatrade_hub" }]
-
-[tool.poetry.scripts]
-project = "main:main"
-
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

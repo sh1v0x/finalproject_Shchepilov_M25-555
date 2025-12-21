@@ -6,3 +6,9 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+.env
+.env.*
+*.pyc
+logs/
+*.log
+data/*.json

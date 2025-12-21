@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -216,7 +217,7 @@ class Portfolio:
         self._wallets: dict[str, Wallet] = {}
 
         if wallets:
-            # добавляем уже существующие кошельки (например, из JSON)
+            # добавляем уже существующие кошельки
             for code, wallet in wallets.items():
                 if code in self._wallets:
                     raise ValueError("Duplicate currency_code in wallets")
@@ -257,37 +258,35 @@ class Portfolio:
         except KeyError as exc:
             raise KeyError(f"No wallet for currency: {code}") from exc
 
-    def get_total_value(self, base_currency: str = "USD") -> float:
+    def get_total_value(
+        self,
+        base_currency: str = "USD",
+        rate_provider: Callable[[str, str], float] | None = None,
+    ) -> float:
         """
-        Возвращает общую стоимость всех валют в base_currency.
-        Для упрощения используем фиксированные курсы.
+        Возвращает общую стоимость портфеля в base_currency.
+
+        rate_provider — функция, возвращающая курс from_code -> to_code.
         """
         base = self._normalize_currency_code(base_currency)
+        total = 0.0
 
-        # Фиктивные курсы: 1 единица валюты -> сколько в USD
-        # (достаточно для демонстрации конвертации на этом этапе)
-        exchange_rates_to_usd: dict[str, float] = {
-            "USD": 1.0,
-            "EUR": 1.1,
-            "BTC": 40000.0,
-        }
-
-        total_usd = 0.0
         for code, wallet in self._wallets.items():
-            if code not in exchange_rates_to_usd:
-                raise KeyError(f"No exchange rate for currency: {code}")
-            total_usd += wallet.balance * exchange_rates_to_usd[code]
+            if wallet.balance <= 0:
+                continue
 
-        if base == "USD":
-            return total_usd
+            if code == base:
+                rate = 1.0
+            else:
+                if rate_provider is None:
+                    raise ValueError(
+                        "Для конвертации портфеля требуется rate_provider"
+                    )
+                rate = float(rate_provider(code, base))
 
-        if base not in exchange_rates_to_usd:
-            raise KeyError(f"No exchange rate for base currency: {base}")
+            total += wallet.balance * rate
 
-        # total_usd / (USD per 1 base) = total in base
-        return total_usd / exchange_rates_to_usd[base]
-
-    # --------- Internal helpers ---------
+        return total
 
     @staticmethod
     def _normalize_currency_code(currency_code: str) -> str:

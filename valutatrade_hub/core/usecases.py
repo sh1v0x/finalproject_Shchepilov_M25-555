@@ -1,27 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
+from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from valutatrade_hub.core.currencies import get_currency
-from valutatrade_hub.core.exceptions import (
-    ApiRequestError,
-    CurrencyNotFoundError,
-)
+from valutatrade_hub.core.exceptions import ApiRequestError
 from valutatrade_hub.core.models import Wallet
 from valutatrade_hub.core.utils import (
-    data_dir,
     generate_salt,
     hash_password,
-    load_json,
     normalize_username,
     now_iso,
     validate_password,
 )
 from valutatrade_hub.decorators import log_action
-from valutatrade_hub.infra.settings import SettingsLoader
 from valutatrade_hub.infra.database import DatabaseManager
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 def validate_currency_code(code: str) -> str:
@@ -29,12 +24,8 @@ def validate_currency_code(code: str) -> str:
     Валидирует валютный код через реестр currencies.get_currency().
     Возвращает нормализованный code (upper).
     """
-    cur = get_currency(code)  # бросит CurrencyNotFoundError при неизвестном коде
+    cur = get_currency(code)  
     return cur.code
-
-USERS_FILE: Path = data_dir() / "users.json"
-PORTFOLIOS_FILE: Path = data_dir() / "portfolios.json"
-RATES_FILE: Path = data_dir() / "rates.json"
 
 
 def _load_users() -> list[dict[str, Any]]:
@@ -58,7 +49,7 @@ def _load_rates() -> dict[str, Any]:
 def _update_user_wallet(
     user_id: int,
     currency_code: str,
-    updater: callable,
+    updater: Callable[[float], float],
 ) -> tuple[float, float]:
     """
     Безопасная операция: чтение → модификация → запись.
@@ -182,46 +173,6 @@ def _normalize_currency_code(code: str) -> str:
     return value
 
 
-def _get_rate(from_code: str, to_code: str) -> float:
-    """
-    Единый контракт получения курса.
-    Сначала пробуем rates.json, если там нет — используем заглушку.
-    """
-    f = _normalize_currency_code(from_code)
-    t = _normalize_currency_code(to_code)
-    if f == t:
-        return 1.0
-
-    pair = f"{f}_{t}"
-    rates = _load_rates()
-    if pair in rates and isinstance(rates[pair], dict) and "rate" in rates[pair]:
-        rate_val = rates[pair]["rate"]
-        if isinstance(rate_val, (int, float)) and rate_val > 0:
-            return float(rate_val)
-
-    # Заглушка (пока Parser Service не подключён)
-    # 1 единица валюты = сколько в USD
-    to_usd: dict[str, float] = {
-        "USD": 1.0,
-        "EUR": 1.07,
-        "BTC": 59337.21,
-        "RUB": 0.01016,
-        "ETH": 3720.0,
-    }
-
-    if t == "USD":
-        if f not in to_usd:
-            raise CurrencyNotFoundError(f)
-        return to_usd[f]
-
-    if t not in to_usd:
-        raise CurrencyNotFoundError(t)
-    if f not in to_usd:
-        raise CurrencyNotFoundError(f)
-
-    return to_usd[f] / to_usd[t]
-
-
 
 def _load_user_portfolio(user_id: int) -> dict[str, float]:
     portfolios = _load_portfolios()
@@ -259,16 +210,14 @@ def build_portfolio_report(user_id: int, base_currency: str = "USD") -> dict[str
     """
     base = _normalize_currency_code(base_currency)
     
-    # Валидация base даже при пустом портфеле
-    _get_rate("USD", base)
-
+    get_rate_with_cache("USD", base)
 
     wallets = _load_user_portfolio(user_id)
     items: list[dict[str, Any]] = []
     total = 0.0
 
     for code, balance in wallets.items():
-        rate = _get_rate(code, base)
+        rate = get_rate_with_cache(code, base)["rate"]
         value_in_base = balance * rate
         items.append(
             {
@@ -279,7 +228,6 @@ def build_portfolio_report(user_id: int, base_currency: str = "USD") -> dict[str
         )
         total += value_in_base
 
-    # стабильно сортируем для красивого вывода
     items.sort(key=lambda x: x["currency_code"])
 
     return {
@@ -300,7 +248,6 @@ def _save_user_wallet_balance(
     record = next((p for p in portfolios if int(p.get("user_id", -1)) == user_id), None)
 
     if record is None:
-        # На всякий случай (в норме портфель создаётся при register)
         record = {"user_id": user_id, "wallets": {}}
         portfolios.append(record)
 
@@ -347,7 +294,7 @@ def buy_currency(
 
     _save_user_wallet_balance(user_id, code, after)
 
-    rate = _get_rate(code, base)
+    rate = get_rate_with_cache(code, base)["rate"]
 
     return {
         "currency": code,
@@ -357,19 +304,6 @@ def buy_currency(
         "before": before,
         "after": after,
         "value_in_base": amt * rate,
-    }
-
-
-    return {
-        "action": "BUY",
-        "user_id": user_id,
-        "currency_code": code,
-        "amount": float(amount),
-        "before": before,
-        "after": after,
-        "rate": rate,
-        "base": base,
-        "value_in_base": float(amount) * rate,
     }
 
 
@@ -401,7 +335,7 @@ def sell_currency(
 
     _save_user_wallet_balance(user_id, code, after)
 
-    rate = _get_rate(code, base)
+    rate = get_rate_with_cache(code, base)["rate"]
     revenue = amt * rate
 
     # Опционально: начисляем выручку в base-кошелёк (например, USD)
@@ -424,17 +358,30 @@ def sell_currency(
 def _parse_iso_dt(value: str) -> datetime | None:
     if not isinstance(value, str) or value.strip() == "":
         return None
+
+    s = value.strip()
+
+    # Приводим ISO с Z к ISO с +00:00
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
     try:
-        return datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(s)
     except ValueError:
         return None
+
+    # Если нет tzinfo — считаем, что это UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt
 
 
 def _is_fresh(updated_at_iso: str, max_age_seconds: int = 300) -> bool:
     dt = _parse_iso_dt(updated_at_iso)
     if dt is None:
         return False
-    age = (datetime.now() - dt).total_seconds()
+    age = (datetime.now(timezone.utc) - dt).total_seconds()
     return age <= max_age_seconds
 
 
@@ -443,70 +390,79 @@ def get_rate_with_cache(
     to_code: str,
     max_age_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """
-    Возвращает курс from->to с учётом кеша rates.json.
-    Если кеш свежий (<= max_age_seconds) — берём его.
-    Иначе — получаем через заглушку (_get_rate) и обновляем кеш.
-
-    Возвращает:
-      {
-        "from": "USD",
-        "to": "BTC",
-        "rate": 0.00001685,
-        "updated_at": "2025-10-09T00:03:22",
-        "reverse_rate": 59337.21
-      }
-    """
     f = _normalize_currency_code(from_code)
     t = _normalize_currency_code(to_code)
+
+    if f == t:
+        now_ts = datetime.now().isoformat(timespec="seconds")
+        return {
+            "from": f, 
+            "to": t, 
+            "rate": 1.0, 
+            "updated_at": now_ts, 
+            "reverse_rate": 1.0,
+        }
 
     if max_age_seconds is None:
         max_age_seconds = int(SettingsLoader().get("RATES_TTL_SECONDS", 300))
 
     pair = f"{f}_{t}"
+    reverse_pair = f"{t}_{f}"
 
-    rates = _load_rates()
-    cached = rates.get(pair)
+    snapshot = _load_rates()
+    pairs = snapshot.get("pairs") if isinstance(snapshot, dict) else None
+    
+    if isinstance(pairs, dict):
+        rates = pairs
+    elif isinstance(snapshot, dict):
+        rates = snapshot
+    else:
+        rates = {}    
+    
+    last_refresh = snapshot.get("last_refresh") if isinstance(snapshot, dict) else None
 
-    if isinstance(cached, dict) and "rate" in cached and "updated_at" in cached:
-        rate_val = cached.get("rate")
-        upd = cached.get("updated_at")
-        if isinstance(rate_val, (int, float)) and isinstance(upd, str):
-            if float(rate_val) > 0 and _is_fresh(upd, max_age_seconds=max_age_seconds):
-                reverse = 1.0 / float(rate_val)
-                return {
-                    "from": f,
-                    "to": t,
-                    "rate": float(rate_val),
-                    "updated_at": upd,
-                    "reverse_rate": reverse,
-                }
+    def _extract_ok(payload: Any) -> tuple[float, str] | None:
+        if not isinstance(payload, dict):
+            return None
+        rate_val = payload.get("rate")
+        upd = payload.get("updated_at") or last_refresh
+        if not isinstance(rate_val, (int, float)) or float(rate_val) <= 0:
+            return None
+        if not isinstance(upd, str) or not _is_fresh(
+            upd, 
+            max_age_seconds=max_age_seconds
+        ):
+            return None
+        return float(rate_val), upd
 
-    # Кеш отсутствует или устарел, берём из заглушки и обновляем кеш
-    try:
-        rate = _get_rate(f, t)
-    except CurrencyNotFoundError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise ApiRequestError(f"не удалось получить курс {f}→{t}") from exc
+    direct = _extract_ok(rates.get(pair))
+    if direct is not None:
+        rate_val, upd = direct
+        return {
+            "from": f,
+            "to": t,
+            "rate": rate_val,
+            "updated_at": upd,
+            "reverse_rate": 1.0 / rate_val,
+        }
 
-    updated_at = datetime.now().isoformat(timespec="seconds")
-    rates[pair] = {"rate": rate, "updated_at": updated_at}
+    rev = _extract_ok(rates.get(reverse_pair))
+    if rev is not None:
+        rate_rev, upd = rev
+        rate_val = 1.0 / rate_rev
+        return {
+            "from": f,
+            "to": t,
+            "rate": rate_val,
+            "updated_at": upd,
+            "reverse_rate": rate_rev,
+        }
 
-    # Сервис-метаданные
-    rates["source"] = "Stub"
-    rates["last_refresh"] = updated_at
+    raise ApiRequestError(
+        f"Курс {f}→{t} отсутствует или устарел. "
+        "Выполните 'update-rates' для обновления кеша."
+    )
 
-    DatabaseManager().write_rates(rates)
-
-    reverse_rate = 1.0 / rate if rate != 0 else 0.0
-    return {
-        "from": f,
-        "to": t,
-        "rate": rate,
-        "updated_at": updated_at,
-        "reverse_rate": reverse_rate,
-    }
 
 def get_rate(from_code: str, to_code: str) -> dict[str, Any]:
     f = validate_currency_code(from_code)
